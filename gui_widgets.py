@@ -145,7 +145,6 @@ class FormField(ctk.CTkFrame):
             self.var.set("")
         self.clear_error()
 
-
 class ConfirmDialog(ctk.CTkToplevel):
     def __init__(self, master, title="Potwierdzenie", message="Czy na pewno chcesz usunac?"):
         super().__init__(master)
@@ -154,7 +153,6 @@ class ConfirmDialog(ctk.CTkToplevel):
         self.resizable(False, False)
         self.result = False
 
-        self.grab_set()
         self.transient(master)
 
         label = ctk.CTkLabel(self, text=message, wraplength=350)
@@ -167,6 +165,9 @@ class ConfirmDialog(ctk.CTkToplevel):
         ctk.CTkButton(btn_frame, text="Nie", command=self._no, width=80).pack(side="left", padx=10)
 
         self.protocol("WM_DELETE_WINDOW", self._no)
+
+        # Wait for window to be created, then grab focus
+        self.after(10, self.grab_set)
         self.wait_window()
 
     def _yes(self):
@@ -185,7 +186,6 @@ class ErrorDialog(ctk.CTkToplevel):
         self.geometry("450x150")
         self.resizable(False, False)
 
-        self.grab_set()
         self.transient(master)
 
         label = ctk.CTkLabel(self, text=message, wraplength=400, text_color="red")
@@ -195,6 +195,8 @@ class ErrorDialog(ctk.CTkToplevel):
 
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
+        self.after(10, self.grab_set)
+
 
 class InfoDialog(ctk.CTkToplevel):
     def __init__(self, master, title="Informacja", message=""):
@@ -203,10 +205,13 @@ class InfoDialog(ctk.CTkToplevel):
         self.geometry("400x150")
         self.resizable(False, False)
 
-        self.grab_set()
         self.transient(master)
 
         label = ctk.CTkLabel(self, text=message, wraplength=350)
         label.pack(pady=20, padx=20)
 
         ctk.CTkButton(self, text="OK", command=self.destroy, width=80).pack(pady=10)
+
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
+        self.after(10, self.grab_set)
