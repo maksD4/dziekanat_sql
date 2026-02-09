@@ -85,10 +85,10 @@ def validate_grade(value, field_name):
 def validate_unique(conn, table, column, value, exclude_pk=None, pk_columns=None):
     if value is None or str(value).strip() == '':
         return None
-    query = f"SELECT COUNT(*) as cnt FROM {table} WHERE {column} = ?"
+    query = f"SELECT COUNT(*) as cnt FROM {table} WHERE {column} = :1"
     params = [value]
     if exclude_pk and pk_columns:
-        conditions = " AND ".join(f"{col} != ?" for col in pk_columns)
+        conditions = " AND ".join(f"{col} != :{i+2}" for i, col in enumerate(pk_columns))
         query += f" AND ({conditions})"
         params.extend(exclude_pk)
     row = conn.execute(query, params).fetchone()
@@ -100,7 +100,7 @@ def validate_unique(conn, table, column, value, exclude_pk=None, pk_columns=None
 def validate_fk_exists(conn, ref_table, ref_columns, values):
     if not values or all(v is None or str(v).strip() == '' for v in values):
         return None
-    conditions = " AND ".join(f"{col} = ?" for col in ref_columns)
+    conditions = " AND ".join(f"{col} = :{i+1}" for i, col in enumerate(ref_columns))
     query = f"SELECT COUNT(*) as cnt FROM {ref_table} WHERE {conditions}"
     row = conn.execute(query, list(values)).fetchone()
     if row['cnt'] == 0:
@@ -111,24 +111,29 @@ def validate_fk_exists(conn, ref_table, ref_columns, values):
 def validate_no_dependents(conn, table, fk_column, value):
     if value is None:
         return None
-    query = f"SELECT COUNT(*) as cnt FROM {table} WHERE {fk_column} = ?"
+    query = f"SELECT COUNT(*) as cnt FROM {table} WHERE {fk_column} = :1"
     row = conn.execute(query, [value]).fetchone()
     if row['cnt'] > 0:
         return f"Nie można usunąć - istnieją powiązane rekordy w tabeli '{table}'"
     return None
 
 
-# --- SQLite error translation ---
+# --- Oracle error translation ---
 
-def translate_sqlite_error(error_msg):
+def translate_db_error(error_msg):
     error_str = str(error_msg)
-    if "UNIQUE constraint failed" in error_str:
+    if "ORA-00001" in error_str:
         return "Rekord z takimi danymi już istnieje"
-    if "FOREIGN KEY constraint failed" in error_str:
+    if "ORA-02291" in error_str:
         return "Powiązane dane nie istnieją w bazie"
-    if "NOT NULL constraint failed" in error_str:
-        col = error_str.split(".")[-1] if "." in error_str else ""
-        return f"Brak wymaganej wartości w polu {col}".strip()
-    if "no such table" in error_str:
+    if "ORA-02292" in error_str:
+        return "Nie można usunąć - istnieją powiązane rekordy"
+    if "ORA-01400" in error_str:
+        return "Brak wymaganej wartości w polu"
+    if "ORA-00942" in error_str:
         return "Tabela nie istnieje w bazie danych"
+    if "ORA-01438" in error_str:
+        return "Wartość jest zbyt duża dla kolumny"
+    if "ORA-12899" in error_str:
+        return "Tekst jest zbyt długi dla kolumny"
     return f"Błąd bazy danych: {error_str}"

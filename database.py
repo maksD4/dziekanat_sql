@@ -1,36 +1,81 @@
-import sqlite3
 import os
+import oracledb
 
-DB_NAME = "dziekanat.db"
+ORACLE_USER = os.environ.get("ORACLE_USER", "dziekanat")
+ORACLE_PASSWORD = os.environ.get("ORACLE_PASSWORD", "dziekanat123")
+ORACLE_DSN = os.environ.get("ORACLE_DSN", "localhost:1521/XEPDB1")
+
+
+class ConnectionWrapper:
+    def __init__(self, raw_conn):
+        self._conn = raw_conn
+
+    def _make_row_factory(self, cursor):
+        columns = [col[0].lower() for col in cursor.description]
+        def row_factory(*args):
+            row = args
+            d = {}
+            for col_name, val in zip(columns, row):
+                if isinstance(val, oracledb.LOB):
+                    val = val.read()
+                if hasattr(val, 'strftime'):
+                    val = val.strftime('%Y-%m-%d')
+                d[col_name] = val
+            return d
+        return row_factory
+
+    def execute(self, sql, params=None):
+        cursor = self._conn.cursor()
+        if params:
+            cursor.execute(sql, params)
+        else:
+            cursor.execute(sql)
+        if cursor.description:
+            cursor.rowfactory = self._make_row_factory(cursor)
+        return cursor
+
+    def executemany(self, sql, params_list):
+        cursor = self._conn.cursor()
+        cursor.executemany(sql, params_list)
+        return cursor
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
 
 
 def get_conn():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    raw = oracledb.connect(user=ORACLE_USER, password=ORACLE_PASSWORD, dsn=ORACLE_DSN)
+    raw.cursor().execute("ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD'")
+    return ConnectionWrapper(raw)
 
 
 def load_ddl_file(conn, file_name):
     with open(file_name, 'r', encoding="utf-8") as f:
         ddl_script = f.read()
-    conn.executescript(ddl_script)
+    for stmt in ddl_script.split(';'):
+        stmt = stmt.strip()
+        if stmt:
+            conn.execute(stmt)
     conn.commit()
 
 
 def create_triggers(conn):
-    conn.executescript("""
-        CREATE TRIGGER IF NOT EXISTS auto_update_oplata_status
-        AFTER UPDATE OF data_wplaty ON oplata
-        WHEN NEW.data_wplaty IS NOT NULL AND OLD.data_wplaty IS NULL
+    conn.execute("""
+        CREATE OR REPLACE TRIGGER auto_update_oplata_status
+        BEFORE UPDATE OF data_wplaty ON oplata
+        FOR EACH ROW
+        WHEN (NEW.data_wplaty IS NOT NULL AND OLD.data_wplaty IS NULL)
         BEGIN
-            UPDATE oplata
-            SET status = 'oplacona'
-            WHERE id_oplaty = NEW.id_oplaty
-              AND student_nr_indeksu = NEW.student_nr_indeksu;
+            :NEW.status := 'oplacona';
         END;
+    """)
+    conn.commit()
 
-        CREATE VIEW IF NOT EXISTS v_karta_studenta AS
+    conn.execute("""
+        CREATE OR REPLACE VIEW v_karta_studenta AS
         SELECT
             s.nr_indeksu,
             s.imie AS student_imie,
@@ -65,38 +110,156 @@ def create_triggers(conn):
         JOIN wydzial w ON k.wydzial_id_wydzialu = w.id_wydzialu
         JOIN prowadzacy pr ON p.prowadzacy_id_prowadzacego = pr.id_prowadzacego
             AND p.prowadzacy_katedra_id_katedry = pr.katedra_id_katedry
-            AND p.prowadzacy_katedra_wydzial_id_wydzialu = pr.katedra_wydzial_id_wydzialu;
+            AND p.prowadzacy_katedra_wydzial_id_wydzialu = pr.katedra_wydzial_id_wydzialu
+    """)
+    conn.commit()
+
+
+SEQUENCES = {
+    'wydzial': 'seq_wydzial',
+    'katedra': 'seq_katedra',
+    'kierunek': 'seq_kierunek',
+    'student': 'seq_student',
+    'prowadzacy': 'seq_prowadzacy',
+    'przedmiot': 'seq_przedmiot',
+    'sala': 'seq_sala',
+    'sala_zajec': 'seq_sala_zajec',
+    'zapis': 'seq_zapis',
+    'obecnosc': 'seq_obecnosc',
+    'ocena': 'seq_ocena',
+    'oplata': 'seq_oplata',
+}
+
+SEQUENCE_ID_COLUMNS = {
+    'wydzial': 'id_wydzialu',
+    'katedra': 'id_katedry',
+    'kierunek': 'id_kierunku',
+    'student': 'nr_indeksu',
+    'prowadzacy': 'id_prowadzacego',
+    'przedmiot': 'id_przedmiotu',
+    'sala': 'id_sali',
+    'sala_zajec': 'id_harmonogramu',
+    'zapis': 'id_zapisu',
+    'obecnosc': 'id_obecnosci',
+    'ocena': 'id',
+    'oplata': 'id_oplaty',
+}
+
+
+def create_sequences(conn):
+    for seq_name in SEQUENCES.values():
+        conn.execute(f"CREATE SEQUENCE {seq_name} START WITH 1 INCREMENT BY 1 NOCACHE")
+    conn.commit()
+
+
+def reset_sequences(conn):
+    for table, seq_name in SEQUENCES.items():
+        id_col = SEQUENCE_ID_COLUMNS[table]
+        row = conn.execute(
+            f"SELECT NVL(MAX({id_col}), 0) AS max_val FROM {table}"
+        ).fetchone()
+        max_val = row['max_val'] or 0
+        if max_val > 0:
+            conn.execute(f"DROP SEQUENCE {seq_name}")
+            conn.execute(
+                f"CREATE SEQUENCE {seq_name} START WITH {max_val + 1} INCREMENT BY 1 NOCACHE"
+            )
+    conn.commit()
+
+
+def create_stored_function(conn):
+    conn.execute("""
+        CREATE OR REPLACE FUNCTION oblicz_srednia_studenta_fn(p_nr_indeksu IN NUMBER)
+        RETURN NUMBER
+        IS
+            v_suma_wazonych NUMBER := 0;
+            v_suma_ects NUMBER := 0;
+        BEGIN
+            SELECT NVL(SUM(o.ocena * p.ects), 0), NVL(SUM(p.ects), 0)
+            INTO v_suma_wazonych, v_suma_ects
+            FROM ocena o
+            JOIN przedmiot p ON o.przedmiot_id_przedmiotu = p.id_przedmiotu
+                AND o.przedmiot_id_kierunku1 = p.kierunek_id_kierunku
+                AND o.przedmiot_id_wydzialu1 = p.kierunek_wydzial_id_wydzialu
+                AND o.przedmiot_id_prowadzacego1 = p.prowadzacy_id_prowadzacego
+                AND o.przedmiot_id_katedry1 = p.prowadzacy_katedra_id_katedry
+                AND o.przedmiot_id_wydzialu11 = p.prowadzacy_katedra_wydzial_id_wydzialu
+            WHERE o.student_nr_indeksu = p_nr_indeksu;
+
+            IF v_suma_ects = 0 THEN
+                RETURN NULL;
+            END IF;
+
+            RETURN ROUND(v_suma_wazonych / v_suma_ects, 2);
+        END;
     """)
     conn.commit()
 
 
 def oblicz_srednia_studenta(conn, nr_indeksu):
-    cursor = conn.execute("""
-        SELECT o.ocena, p.ects
-        FROM ocena o
-        JOIN przedmiot p ON o.przedmiot_id_przedmiotu = p.id_przedmiotu
-            AND o.przedmiot_id_kierunku1 = p.kierunek_id_kierunku
-            AND o.przedmiot_id_wydzialu1 = p.kierunek_wydzial_id_wydzialu
-            AND o.przedmiot_id_prowadzacego1 = p.prowadzacy_id_prowadzacego
-            AND o.przedmiot_id_katedry1 = p.prowadzacy_katedra_id_katedry
-            AND o.przedmiot_id_wydzialu11 = p.prowadzacy_katedra_wydzial_id_wydzialu
-        WHERE o.student_nr_indeksu = ?
-    """, (nr_indeksu,))
-    rows = cursor.fetchall()
-    if not rows:
-        return None
-    suma_wazonych = sum(r['ocena'] * r['ects'] for r in rows)
-    suma_ects = sum(r['ects'] for r in rows)
-    if suma_ects == 0:
-        return None
-    return round(suma_wazonych / suma_ects, 2)
+    row = conn.execute(
+        "SELECT oblicz_srednia_studenta_fn(:1) AS srednia FROM DUAL",
+        [nr_indeksu]
+    ).fetchone()
+    return row['srednia'] if row else None
+
+
+def db_exists():
+    try:
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM user_tables WHERE table_name = 'WYDZIAL'"
+        ).fetchone()
+        conn.close()
+        return row['cnt'] > 0
+    except Exception:
+        return False
 
 
 def init_db():
-    if os.path.exists(DB_NAME):
-        os.remove(DB_NAME)
     conn = get_conn()
+
+    # Drop tables in reverse dependency order
+    tables_to_drop = [
+        'oplata', 'ocena', 'obecnosc', 'zapis', 'sala_zajec',
+        'przedmiot', 'sala', 'prowadzacy', 'student', 'kierunek',
+        'katedra', 'wydzial'
+    ]
+    for table in tables_to_drop:
+        try:
+            conn.execute(f"DROP TABLE {table} CASCADE CONSTRAINTS")
+        except Exception:
+            pass
+    conn.commit()
+
+    # Drop view
+    try:
+        conn.execute("DROP VIEW v_karta_studenta")
+    except Exception:
+        pass
+    conn.commit()
+
+    # Drop sequences
+    for seq_name in SEQUENCES.values():
+        try:
+            conn.execute(f"DROP SEQUENCE {seq_name}")
+        except Exception:
+            pass
+    conn.commit()
+
+    # Drop stored function
+    try:
+        conn.execute("DROP FUNCTION oblicz_srednia_studenta_fn")
+    except Exception:
+        pass
+    conn.commit()
+
+    # Create tables from DDL
     load_ddl_file(conn, 'dziekanat.ddl')
-    conn = get_conn()
+
+    # Create triggers, view, sequences, stored function
     create_triggers(conn)
+    create_sequences(conn)
+    create_stored_function(conn)
+
     conn.close()

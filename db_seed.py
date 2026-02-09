@@ -1,4 +1,4 @@
-from database import get_conn
+from database import get_conn, reset_sequences
 
 
 def seed_db():
@@ -6,7 +6,7 @@ def seed_db():
     try:
         # 1. Wydziały
         conn.executemany(
-            "INSERT INTO wydzial VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO wydzial VALUES (:1, :2, :3, :4, :5, :6)",
             [
                 (1, 'Informatyki', 'ul. Akademicka 1', 'wi@uczelnia.pl', '+48111222333', 'prof. Jan Nowak'),
                 (2, 'Matematyki', 'ul. Akademicka 2', 'wm@uczelnia.pl', '+48111222444', 'prof. Anna Kowal'),
@@ -15,7 +15,7 @@ def seed_db():
 
         # 2. Katedry
         conn.executemany(
-            "INSERT INTO katedra VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO katedra VALUES (:1, :2, :3, :4, :5, :6)",
             [
                 (1, 'Katedra Syst. Inf.', 1, 'dr hab. Piotr Ziel.', 'Systemy informacyjne', 1),
                 (2, 'Katedra Sieci', 2, 'dr hab. Ewa Biala', 'Sieci komputerowe', 1),
@@ -25,7 +25,7 @@ def seed_db():
 
         # 3. Kierunki
         conn.executemany(
-            "INSERT INTO kierunek VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO kierunek VALUES (:1, :2, :3, :4, :5, :6, :7)",
             [
                 (1, 'Informatyka', 'inzynierskie', 1, 7, 'stacjonarny', 1),
                 (2, 'Cyberbezp.', 'magisterskie', 2, 4, 'stacjonarny', 1),
@@ -35,7 +35,7 @@ def seed_db():
 
         # 4. Prowadzący
         conn.executemany(
-            "INSERT INTO prowadzacy VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO prowadzacy VALUES (:1, :2, :3, :4, :5, :6, :7, :8, :9, :10)",
             [
                 (1, 'Adam', 'Wisniewski', 'dr', 'awisn@ucz.pl', '+48222111001', 1, '2015-09-01', 1, 1),
                 (2, 'Beata', 'Kaminska', 'dr hab.', 'bkam@ucz.pl', '+48222111002', 2, '2010-03-15', 2, 1),
@@ -46,7 +46,7 @@ def seed_db():
 
         # 5. Studenci
         conn.executemany(
-            "INSERT INTO student VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO student VALUES (:1, :2, :3, :4, :5, :6, :7, :8, :9, :10, :11)",
             [
                 (100001, 'Jan', 'Kowalski', 'jkowal@st.pl', '2000-05-15', 1, 3, '2022-10-01', 'aktywny', 1, 1),
                 (100002, 'Maria', 'Nowak', 'mnowak@st.pl', '2001-03-20', 1, 3, '2022-10-01', 'aktywny', 1, 1),
@@ -58,7 +58,7 @@ def seed_db():
 
         # 6. Przedmioty
         conn.executemany(
-            "INSERT INTO przedmiot VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO przedmiot VALUES (:1, :2, :3, :4, :5, :6, :7, :8, :9, :10, :11, :12, :13)",
             [
                 (1, 'INF101', 'Programowanie I', 6, 1, 'wyklad', 1, 1, 1, 1, 1, 1, 1),
                 (2, 'INF201', 'Bazy danych', 5, 3, 'wyklad', 2, 1, 1, 1, 2, 2, 1),
@@ -69,7 +69,7 @@ def seed_db():
 
         # 7. Sale
         conn.executemany(
-            "INSERT INTO sala VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sala VALUES (:1, :2, :3, :4, :5, :6)",
             [
                 (1, 'A101', 'Budynek A', 120, 'wykladowa', 'projektor, tablica'),
                 (2, 'B205', 'Budynek B', 30, 'laboratoryjna', 'komputery, projektor'),
@@ -79,7 +79,7 @@ def seed_db():
 
         # 8. Harmonogram (sala_zajec)
         conn.executemany(
-            """INSERT INTO sala_zajec VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            "INSERT INTO sala_zajec VALUES (:1, :2, :3, :4, :5, :6, :7, :8, :9, :10, :11, :12, :13, :14, :15)",
             [
                 (1, 1, 1, 'poniedzialek', '08:00', '09:30', '2024-10-01', '2025-01-31', 1, 1, 1, 1, 1, 1, 1),
                 (2, 2, 2, 'wtorek', '10:00', '11:30', '2024-10-01', '2025-01-31', 2, 2, 1, 1, 2, 2, 1),
@@ -89,7 +89,7 @@ def seed_db():
 
         # 9. Zapisy
         conn.executemany(
-            "INSERT INTO zapis VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO zapis VALUES (:1, :2, :3, :4, :5, :6, :7, :8, :9, :10, :11, :12, :13)",
             [
                 (1, 100001, 1, '2024-09-15', 'aktywny', 2024, 1, 1, 1, 1, 1, 1, 100001),
                 (2, 100001, 2, '2024-09-15', 'aktywny', 2024, 2, 1, 1, 2, 2, 1, 100001),
@@ -100,7 +100,7 @@ def seed_db():
 
         # 10. Obecności
         conn.executemany(
-            "INSERT INTO obecnosc VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO obecnosc VALUES (:1, :2, :3, :4, :5, :6, :7, :8, :9, :10, :11, :12, :13)",
             [
                 (1, 100001, 1, '2024-10-07', 'obecny', None, 100001, 1, 1, 1, 1, 1, 1),
                 (2, 100001, 1, '2024-10-14', 'obecny', None, 100001, 1, 1, 1, 1, 1, 1),
@@ -112,7 +112,7 @@ def seed_db():
 
         # 11. Oceny
         conn.executemany(
-            "INSERT INTO ocena VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO ocena VALUES (:1, :2, :3, :4, :5, :6, :7, :8, :9, :10, :11, :12, :13, :14, :15)",
             [
                 (1, 100001, 1, 4.5, '2025-01-28', 'egzamin', None, 1, 100001, 1, 1, 1, 1, 1, 1),
                 (2, 100001, 2, 5.0, '2025-01-29', 'egzamin', None, 2, 100001, 2, 1, 1, 2, 2, 1),
@@ -123,7 +123,7 @@ def seed_db():
 
         # 12. Opłaty
         conn.executemany(
-            "INSERT INTO oplata VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO oplata VALUES (:1, :2, :3, :4, :5, :6, :7, :8)",
             [
                 (1, 100001, 500.00, 'czesne', '2024-10-15', '2024-10-10', 'oplacona', 100001),
                 (2, 100002, 500.00, 'czesne', '2024-10-15', None, 'nieoplacona', 100002),
@@ -134,5 +134,8 @@ def seed_db():
         )
 
         conn.commit()
+
+        # Reset sequences to match seeded data
+        reset_sequences(conn)
     finally:
         conn.close()

@@ -1,6 +1,6 @@
 import customtkinter as ctk
 from gui_widgets import DataTable, SearchBar, FormField, ConfirmDialog, ErrorDialog, InfoDialog
-from validators import translate_sqlite_error
+from validators import translate_db_error
 
 
 class BaseFormScreen(ctk.CTkFrame):
@@ -191,7 +191,7 @@ class BaseFormScreen(ctk.CTkFrame):
             self._on_clear_form()
             InfoDialog(self, message="Rekord dodany pomyslnie")
         except Exception as e:
-            ErrorDialog(self, message=translate_sqlite_error(str(e)))
+            ErrorDialog(self, message=translate_db_error(str(e)))
 
     def _on_edit(self):
         if not self.selected_row:
@@ -210,7 +210,7 @@ class BaseFormScreen(ctk.CTkFrame):
             self._on_clear_form()
             InfoDialog(self, message="Rekord zaktualizowany pomyslnie")
         except Exception as e:
-            ErrorDialog(self, message=translate_sqlite_error(str(e)))
+            ErrorDialog(self, message=translate_db_error(str(e)))
 
     def _on_delete(self):
         if not self.selected_row:
@@ -225,7 +225,7 @@ class BaseFormScreen(ctk.CTkFrame):
                 self._on_clear_form()
                 InfoDialog(self, message="Rekord usuniety pomyslnie")
             except Exception as e:
-                ErrorDialog(self, message=translate_sqlite_error(str(e)))
+                ErrorDialog(self, message=translate_db_error(str(e)))
 
     def _on_clear_form(self):
         self.selected_row = None

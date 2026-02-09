@@ -1,4 +1,4 @@
-from database import get_conn
+from database import get_conn, SEQUENCES
 
 
 class BaseRepository:
@@ -18,7 +18,7 @@ class BaseRepository:
     def get_by_pk(self, pk_values):
         conn = get_conn()
         try:
-            conditions = " AND ".join(f"{col} = ?" for col in self.PK_COLUMNS)
+            conditions = " AND ".join(f"{col} = :{i+1}" for i, col in enumerate(self.PK_COLUMNS))
             row = conn.execute(
                 f"SELECT * FROM {self.TABLE} WHERE {conditions}", list(pk_values)
             ).fetchone()
@@ -31,7 +31,7 @@ class BaseRepository:
         try:
             cols = ", ".join(self.COLUMNS)
             rows = conn.execute(
-                f"SELECT {cols} FROM {self.TABLE} WHERE CAST({column} AS TEXT) LIKE ?",
+                f"SELECT {cols} FROM {self.TABLE} WHERE TO_CHAR({column}) LIKE :1",
                 [f"%{pattern}%"]
             ).fetchall()
             return [dict(r) for r in rows]
@@ -42,7 +42,7 @@ class BaseRepository:
         conn = get_conn()
         try:
             columns = ", ".join(data.keys())
-            placeholders = ", ".join("?" for _ in data)
+            placeholders = ", ".join(f":{i+1}" for i in range(len(data)))
             conn.execute(
                 f"INSERT INTO {self.TABLE} ({columns}) VALUES ({placeholders})",
                 list(data.values())
@@ -54,8 +54,11 @@ class BaseRepository:
     def update(self, pk_values, data):
         conn = get_conn()
         try:
-            set_clause = ", ".join(f"{col} = ?" for col in data.keys())
-            where_clause = " AND ".join(f"{col} = ?" for col in self.PK_COLUMNS)
+            set_clause = ", ".join(f"{col} = :{i+1}" for i, col in enumerate(data.keys()))
+            offset = len(data)
+            where_clause = " AND ".join(
+                f"{col} = :{offset+i+1}" for i, col in enumerate(self.PK_COLUMNS)
+            )
             params = list(data.values()) + list(pk_values)
             conn.execute(
                 f"UPDATE {self.TABLE} SET {set_clause} WHERE {where_clause}", params
@@ -67,7 +70,7 @@ class BaseRepository:
     def delete(self, pk_values):
         conn = get_conn()
         try:
-            where_clause = " AND ".join(f"{col} = ?" for col in self.PK_COLUMNS)
+            where_clause = " AND ".join(f"{col} = :{i+1}" for i, col in enumerate(self.PK_COLUMNS))
             conn.execute(
                 f"DELETE FROM {self.TABLE} WHERE {where_clause}", list(pk_values)
             )
@@ -76,10 +79,20 @@ class BaseRepository:
             conn.close()
 
     def next_id(self, column):
+        seq_name = SEQUENCES.get(self.TABLE)
+        if seq_name:
+            conn = get_conn()
+            try:
+                row = conn.execute(
+                    f"SELECT {seq_name}.NEXTVAL AS max_val FROM DUAL"
+                ).fetchone()
+                return row['max_val']
+            finally:
+                conn.close()
         conn = get_conn()
         try:
             row = conn.execute(
-                f"SELECT MAX({column}) as max_val FROM {self.TABLE}"
+                f"SELECT NVL(MAX({column}), 0) AS max_val FROM {self.TABLE}"
             ).fetchone()
             return (row['max_val'] or 0) + 1
         finally:
@@ -136,7 +149,7 @@ class KatedraRepo(BaseRepository):
                        k.kierownik, k.specjalizacja, w.nazwa AS wydzial_nazwa
                 FROM katedra k
                 JOIN wydzial w ON k.wydzial_id_wydzialu = w.id_wydzialu
-                WHERE CAST(k.{column} AS TEXT) LIKE ?
+                WHERE TO_CHAR(k.{column}) LIKE :1
             """, [f"%{pattern}%"]).fetchall()
             return [dict(r) for r in rows]
         finally:
@@ -182,7 +195,7 @@ class KierunekRepo(BaseRepository):
                        w.nazwa AS wydzial_nazwa
                 FROM kierunek ki
                 JOIN wydzial w ON ki.wydzial_id_wydzialu = w.id_wydzialu
-                WHERE CAST(ki.{column} AS TEXT) LIKE ?
+                WHERE TO_CHAR(ki.{column}) LIKE :1
             """, [f"%{pattern}%"]).fetchall()
             return [dict(r) for r in rows]
         finally:
@@ -192,7 +205,7 @@ class KierunekRepo(BaseRepository):
         conn = get_conn()
         try:
             rows = conn.execute(
-                "SELECT id_kierunku, wydzial_id_wydzialu, nazwa FROM kierunek WHERE wydzial_id_wydzialu = ?",
+                "SELECT id_kierunku, wydzial_id_wydzialu, nazwa FROM kierunek WHERE wydzial_id_wydzialu = :1",
                 [wydzial_id]
             ).fetchall()
             return [dict(r) for r in rows]
@@ -254,7 +267,7 @@ class StudentRepo(BaseRepository):
                 JOIN kierunek k ON s.kierunek_id_kierunku = k.id_kierunku
                     AND s.kierunek_wydzial_id_wydzialu = k.wydzial_id_wydzialu
                 JOIN wydzial w ON k.wydzial_id_wydzialu = w.id_wydzialu
-                WHERE CAST(s.{column} AS TEXT) LIKE ?
+                WHERE TO_CHAR(s.{column}) LIKE :1
             """, [f"%{pattern}%"]).fetchall()
             return [dict(r) for r in rows]
         finally:
@@ -307,7 +320,7 @@ class ProwadzacyRepo(BaseRepository):
                 JOIN katedra ka ON p.katedra_id_katedry = ka.id_katedry
                     AND p.katedra_wydzial_id_wydzialu = ka.wydzial_id_wydzialu
                 JOIN wydzial w ON ka.wydzial_id_wydzialu = w.id_wydzialu
-                WHERE CAST(p.{column} AS TEXT) LIKE ?
+                WHERE TO_CHAR(p.{column}) LIKE :1
             """, [f"%{pattern}%"]).fetchall()
             return [dict(r) for r in rows]
         finally:
@@ -320,7 +333,7 @@ class ProwadzacyRepo(BaseRepository):
                 SELECT id_prowadzacego, katedra_id_katedry, katedra_wydzial_id_wydzialu,
                        tytul, imie, nazwisko
                 FROM prowadzacy
-                WHERE katedra_id_katedry = ? AND katedra_wydzial_id_wydzialu = ?
+                WHERE katedra_id_katedry = :1 AND katedra_wydzial_id_wydzialu = :2
             """, [id_katedry, wydzial_id]).fetchall()
             return [dict(r) for r in rows]
         finally:
@@ -391,7 +404,7 @@ class PrzedmiotRepo(BaseRepository):
                     AND pr.prowadzacy_katedra_id_katedry = p.katedra_id_katedry
                     AND pr.prowadzacy_katedra_wydzial_id_wydzialu = p.katedra_wydzial_id_wydzialu
                 JOIN wydzial w ON pr.kierunek_wydzial_id_wydzialu = w.id_wydzialu
-                WHERE CAST(pr.{column} AS TEXT) LIKE ?
+                WHERE TO_CHAR(pr.{column}) LIKE :1
             """, [f"%{pattern}%"]).fetchall()
             return [dict(r) for r in rows]
         finally:
@@ -664,8 +677,8 @@ class OplataRepo(BaseRepository):
         conn = get_conn()
         try:
             conn.execute("""
-                UPDATE oplata SET data_wplaty = ?
-                WHERE id_oplaty = ? AND student_nr_indeksu = ?
+                UPDATE oplata SET data_wplaty = :1
+                WHERE id_oplaty = :2 AND student_nr_indeksu = :3
             """, [data_wplaty, id_oplaty, student_nr_indeksu])
             conn.commit()
         finally:
@@ -679,7 +692,7 @@ class KartaStudentaRepo:
         conn = get_conn()
         try:
             rows = conn.execute(
-                "SELECT * FROM v_karta_studenta WHERE nr_indeksu = ?",
+                "SELECT * FROM v_karta_studenta WHERE nr_indeksu = :1",
                 [nr_indeksu]
             ).fetchall()
             return [dict(r) for r in rows]
