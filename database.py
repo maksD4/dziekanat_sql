@@ -204,6 +204,159 @@ def oblicz_srednia_studenta(conn, nr_indeksu):
     return row['srednia'] if row else None
 
 
+def create_stored_function_frekwencja(conn):
+    conn.execute("""
+        CREATE OR REPLACE FUNCTION oblicz_frekwencje_studenta_fn(p_nr_indeksu IN NUMBER)
+        RETURN NUMBER
+        IS
+            v_total NUMBER := 0;
+            v_obecny NUMBER := 0;
+        BEGIN
+            SELECT COUNT(*)
+            INTO v_total
+            FROM obecnosc
+            WHERE student_nr_indeksu = p_nr_indeksu;
+
+            IF v_total = 0 THEN
+                RETURN NULL;
+            END IF;
+
+            SELECT COUNT(*)
+            INTO v_obecny
+            FROM obecnosc
+            WHERE student_nr_indeksu = p_nr_indeksu
+              AND status IN ('obecny', 'spozniony');
+
+            RETURN ROUND(v_obecny * 100 / v_total, 1);
+        END;
+    """)
+    conn.commit()
+
+
+def oblicz_frekwencje_studenta(conn, nr_indeksu):
+    row = conn.execute(
+        "SELECT oblicz_frekwencje_studenta_fn(:1) AS frekwencja FROM DUAL",
+        [nr_indeksu]
+    ).fetchone()
+    return row['frekwencja'] if row else None
+
+
+def create_procedure_zalicz_semestr(conn):
+    conn.execute("""
+        CREATE OR REPLACE PROCEDURE zalicz_semestr_proc(p_nr_indeksu IN NUMBER)
+        IS
+            v_count NUMBER;
+        BEGIN
+            SELECT COUNT(*) INTO v_count
+            FROM student WHERE nr_indeksu = p_nr_indeksu;
+
+            IF v_count = 0 THEN
+                RAISE_APPLICATION_ERROR(-20001, 'Student o nr indeksu ' || p_nr_indeksu || ' nie istnieje');
+            END IF;
+
+            UPDATE zapis
+            SET status = 'zakonczony'
+            WHERE student_nr_indeksu = p_nr_indeksu
+              AND status = 'aktywny';
+
+            UPDATE student
+            SET semestr = semestr + 1
+            WHERE nr_indeksu = p_nr_indeksu;
+
+            COMMIT;
+        END;
+    """)
+    conn.commit()
+
+
+def zalicz_semestr(conn, nr_indeksu):
+    conn.execute("BEGIN zalicz_semestr_proc(:1); END;", [nr_indeksu])
+
+
+def create_procedure_zapisz_na_semestr(conn):
+    conn.execute("""
+        CREATE OR REPLACE PROCEDURE zapisz_na_semestr_proc(
+            p_nr_indeksu IN NUMBER,
+            p_rok_akademicki IN NUMBER
+        )
+        IS
+            v_kierunek_id NUMBER;
+            v_wydzial_id NUMBER;
+            v_semestr NUMBER;
+            v_count NUMBER;
+            v_exists NUMBER;
+            CURSOR c_przedmioty IS
+                SELECT id_przedmiotu, kierunek_id_kierunku,
+                       kierunek_wydzial_id_wydzialu,
+                       prowadzacy_id_prowadzacego,
+                       prowadzacy_katedra_id_katedry,
+                       prowadzacy_katedra_wydzial_id_wydzialu
+                FROM przedmiot
+                WHERE kierunek_id_kierunku = v_kierunek_id
+                  AND kierunek_wydzial_id_wydzialu = v_wydzial_id
+                  AND semestr = v_semestr;
+        BEGIN
+            SELECT kierunek_id_kierunku, kierunek_wydzial_id_wydzialu, semestr
+            INTO v_kierunek_id, v_wydzial_id, v_semestr
+            FROM student
+            WHERE nr_indeksu = p_nr_indeksu;
+
+            v_count := 0;
+
+            FOR rec IN c_przedmioty LOOP
+                SELECT COUNT(*) INTO v_exists
+                FROM zapis
+                WHERE student_nr_indeksu = p_nr_indeksu
+                  AND przedmiot_id_przedmiotu = rec.id_przedmiotu
+                  AND przedmiot_kierunek_id_kierunku = rec.kierunek_id_kierunku
+                  AND przedmiot_kierunek_wydzial_id_wydzialu = rec.kierunek_wydzial_id_wydzialu
+                  AND przedmiot_prowadzacy_id_prowadzacego = rec.prowadzacy_id_prowadzacego
+                  AND przedmiot_prowadzacy_katedra_id_katedry = rec.prowadzacy_katedra_id_katedry
+                  AND przedmiot_prowadzacy_katedra_wydzial_id_wydzialu = rec.prowadzacy_katedra_wydzial_id_wydzialu
+                  AND rok_akademicki = p_rok_akademicki;
+
+                IF v_exists = 0 THEN
+                    INSERT INTO zapis (
+                        id_zapisu, nr_indeksu, id_przedmiotu,
+                        data_zapisu, status, rok_akademicki,
+                        przedmiot_id_przedmiotu,
+                        przedmiot_kierunek_id_kierunku,
+                        przedmiot_kierunek_wydzial_id_wydzialu,
+                        przedmiot_prowadzacy_id_prowadzacego,
+                        przedmiot_prowadzacy_katedra_id_katedry,
+                        przedmiot_prowadzacy_katedra_wydzial_id_wydzialu,
+                        student_nr_indeksu
+                    ) VALUES (
+                        seq_zapis.NEXTVAL, p_nr_indeksu, rec.id_przedmiotu,
+                        SYSDATE, 'aktywny', p_rok_akademicki,
+                        rec.id_przedmiotu,
+                        rec.kierunek_id_kierunku,
+                        rec.kierunek_wydzial_id_wydzialu,
+                        rec.prowadzacy_id_prowadzacego,
+                        rec.prowadzacy_katedra_id_katedry,
+                        rec.prowadzacy_katedra_wydzial_id_wydzialu,
+                        p_nr_indeksu
+                    );
+                    v_count := v_count + 1;
+                END IF;
+            END LOOP;
+
+            COMMIT;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                RAISE_APPLICATION_ERROR(-20002, 'Student o nr indeksu ' || p_nr_indeksu || ' nie istnieje');
+        END;
+    """)
+    conn.commit()
+
+
+def zapisz_na_semestr(conn, nr_indeksu, rok_akademicki):
+    conn.execute(
+        "BEGIN zapisz_na_semestr_proc(:1, :2); END;",
+        [nr_indeksu, rok_akademicki]
+    )
+
+
 def db_exists():
     try:
         conn = get_conn()
@@ -247,19 +400,28 @@ def init_db():
             pass
     conn.commit()
 
-    # Drop stored function
-    try:
-        conn.execute("DROP FUNCTION oblicz_srednia_studenta_fn")
-    except Exception:
-        pass
+    # Drop stored functions and procedures
+    for obj_type, obj_name in [
+        ("FUNCTION", "oblicz_srednia_studenta_fn"),
+        ("FUNCTION", "oblicz_frekwencje_studenta_fn"),
+        ("PROCEDURE", "zalicz_semestr_proc"),
+        ("PROCEDURE", "zapisz_na_semestr_proc"),
+    ]:
+        try:
+            conn.execute(f"DROP {obj_type} {obj_name}")
+        except Exception:
+            pass
     conn.commit()
 
     # Create tables from DDL
     load_ddl_file(conn, 'dziekanat.ddl')
 
-    # Create triggers, view, sequences, stored function
+    # Create triggers, view, sequences, stored functions and procedures
     create_triggers(conn)
     create_sequences(conn)
     create_stored_function(conn)
+    create_stored_function_frekwencja(conn)
+    create_procedure_zalicz_semestr(conn)
+    create_procedure_zapisz_na_semestr(conn)
 
     conn.close()
