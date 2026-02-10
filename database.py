@@ -98,19 +98,11 @@ def create_triggers(conn):
             pr.imie AS prowadzacy_imie,
             pr.nazwisko AS prowadzacy_nazwisko
         FROM ocena o
-        JOIN student s ON o.student_nr_indeksu = s.nr_indeksu
-        JOIN przedmiot p ON o.przedmiot_id_przedmiotu = p.id_przedmiotu
-            AND o.przedmiot_id_kierunku1 = p.kierunek_id_kierunku
-            AND o.przedmiot_id_wydzialu1 = p.kierunek_wydzial_id_wydzialu
-            AND o.przedmiot_id_prowadzacego1 = p.prowadzacy_id_prowadzacego
-            AND o.przedmiot_id_katedry1 = p.prowadzacy_katedra_id_katedry
-            AND o.przedmiot_id_wydzialu11 = p.prowadzacy_katedra_wydzial_id_wydzialu
-        JOIN kierunek k ON s.kierunek_id_kierunku = k.id_kierunku
-            AND s.kierunek_wydzial_id_wydzialu = k.wydzial_id_wydzialu
-        JOIN wydzial w ON k.wydzial_id_wydzialu = w.id_wydzialu
-        JOIN prowadzacy pr ON p.prowadzacy_id_prowadzacego = pr.id_prowadzacego
-            AND p.prowadzacy_katedra_id_katedry = pr.katedra_id_katedry
-            AND p.prowadzacy_katedra_wydzial_id_wydzialu = pr.katedra_wydzial_id_wydzialu
+        JOIN student s ON o.nr_indeksu = s.nr_indeksu
+        JOIN przedmiot p ON o.id_przedmiotu = p.id_przedmiotu
+        JOIN kierunek k ON s.id_kierunku = k.id_kierunku
+        JOIN wydzial w ON k.id_wydzialu = w.id_wydzialu
+        JOIN prowadzacy pr ON p.id_prowadzacego = pr.id_prowadzacego;
     """)
     conn.commit()
 
@@ -175,21 +167,17 @@ def create_stored_function(conn):
             v_suma_wazonych NUMBER := 0;
             v_suma_ects NUMBER := 0;
         BEGIN
-            SELECT NVL(SUM(o.ocena * p.ects), 0), NVL(SUM(p.ects), 0)
+            SELECT NVL(SUM(o.ocena * p.ects), 0), 
+                   NVL(SUM(p.ects), 0)
             INTO v_suma_wazonych, v_suma_ects
             FROM ocena o
-            JOIN przedmiot p ON o.przedmiot_id_przedmiotu = p.id_przedmiotu
-                AND o.przedmiot_id_kierunku1 = p.kierunek_id_kierunku
-                AND o.przedmiot_id_wydzialu1 = p.kierunek_wydzial_id_wydzialu
-                AND o.przedmiot_id_prowadzacego1 = p.prowadzacy_id_prowadzacego
-                AND o.przedmiot_id_katedry1 = p.prowadzacy_katedra_id_katedry
-                AND o.przedmiot_id_wydzialu11 = p.prowadzacy_katedra_wydzial_id_wydzialu
-            WHERE o.student_nr_indeksu = p_nr_indeksu;
-
+            JOIN przedmiot p ON o.id_przedmiotu = p.id_przedmiotu
+            WHERE o.nr_indeksu = p_nr_indeksu;
+        
             IF v_suma_ects = 0 THEN
                 RETURN NULL;
             END IF;
-
+        
             RETURN ROUND(v_suma_wazonych / v_suma_ects, 2);
         END;
     """)
@@ -215,18 +203,18 @@ def create_stored_function_frekwencja(conn):
             SELECT COUNT(*)
             INTO v_total
             FROM obecnosc
-            WHERE student_nr_indeksu = p_nr_indeksu;
-
+            WHERE nr_indeksu = p_nr_indeksu;
+        
             IF v_total = 0 THEN
                 RETURN NULL;
             END IF;
-
+        
             SELECT COUNT(*)
             INTO v_obecny
             FROM obecnosc
-            WHERE student_nr_indeksu = p_nr_indeksu
+            WHERE nr_indeksu = p_nr_indeksu
               AND status IN ('obecny', 'spozniony');
-
+        
             RETURN ROUND(v_obecny * 100 / v_total, 1);
         END;
     """)
@@ -249,20 +237,21 @@ def create_procedure_zalicz_semestr(conn):
         BEGIN
             SELECT COUNT(*) INTO v_count
             FROM student WHERE nr_indeksu = p_nr_indeksu;
-
+        
             IF v_count = 0 THEN
-                RAISE_APPLICATION_ERROR(-20001, 'Student o nr indeksu ' || p_nr_indeksu || ' nie istnieje');
+                RAISE_APPLICATION_ERROR(-20001, 
+                    'Student o nr indeksu ' || p_nr_indeksu || ' nie istnieje');
             END IF;
-
+        
             UPDATE zapis
             SET status = 'zakonczony'
-            WHERE student_nr_indeksu = p_nr_indeksu
+            WHERE nr_indeksu = p_nr_indeksu
               AND status = 'aktywny';
-
+        
             UPDATE student
             SET semestr = semestr + 1
             WHERE nr_indeksu = p_nr_indeksu;
-
+        
             COMMIT;
         END;
     """)
@@ -281,70 +270,55 @@ def create_procedure_zapisz_na_semestr(conn):
         )
         IS
             v_kierunek_id NUMBER;
-            v_wydzial_id NUMBER;
             v_semestr NUMBER;
-            v_count NUMBER;
             v_exists NUMBER;
+            
             CURSOR c_przedmioty IS
-                SELECT id_przedmiotu, kierunek_id_kierunku,
-                       kierunek_wydzial_id_wydzialu,
-                       prowadzacy_id_prowadzacego,
-                       prowadzacy_katedra_id_katedry,
-                       prowadzacy_katedra_wydzial_id_wydzialu
+                SELECT id_przedmiotu
                 FROM przedmiot
-                WHERE kierunek_id_kierunku = v_kierunek_id
-                  AND kierunek_wydzial_id_wydzialu = v_wydzial_id
+                WHERE id_kierunku = v_kierunek_id
                   AND semestr = v_semestr;
         BEGIN
-            SELECT kierunek_id_kierunku, kierunek_wydzial_id_wydzialu, semestr
-            INTO v_kierunek_id, v_wydzial_id, v_semestr
+            -- Pobieranie danych studenta
+            SELECT id_kierunku, semestr
+            INTO v_kierunek_id, v_semestr
             FROM student
             WHERE nr_indeksu = p_nr_indeksu;
-
-            v_count := 0;
-
+        
+            -- Dla każdego przedmiotu z danego kierunku i semestru
             FOR rec IN c_przedmioty LOOP
+                -- Sprawdź czy student już jest zapisany
                 SELECT COUNT(*) INTO v_exists
                 FROM zapis
-                WHERE student_nr_indeksu = p_nr_indeksu
-                  AND przedmiot_id_przedmiotu = rec.id_przedmiotu
-                  AND przedmiot_kierunek_id_kierunku = rec.kierunek_id_kierunku
-                  AND przedmiot_kierunek_wydzial_id_wydzialu = rec.kierunek_wydzial_id_wydzialu
-                  AND przedmiot_prowadzacy_id_prowadzacego = rec.prowadzacy_id_prowadzacego
-                  AND przedmiot_prowadzacy_katedra_id_katedry = rec.prowadzacy_katedra_id_katedry
-                  AND przedmiot_prowadzacy_katedra_wydzial_id_wydzialu = rec.prowadzacy_katedra_wydzial_id_wydzialu
+                WHERE nr_indeksu = p_nr_indeksu
+                  AND id_przedmiotu = rec.id_przedmiotu
                   AND rok_akademicki = p_rok_akademicki;
-
+        
+                -- Jeśli nie jest zapisany - dodaj
                 IF v_exists = 0 THEN
                     INSERT INTO zapis (
-                        id_zapisu, nr_indeksu, id_przedmiotu,
-                        data_zapisu, status, rok_akademicki,
-                        przedmiot_id_przedmiotu,
-                        przedmiot_kierunek_id_kierunku,
-                        przedmiot_kierunek_wydzial_id_wydzialu,
-                        przedmiot_prowadzacy_id_prowadzacego,
-                        przedmiot_prowadzacy_katedra_id_katedry,
-                        przedmiot_prowadzacy_katedra_wydzial_id_wydzialu,
-                        student_nr_indeksu
+                        id_zapisu, 
+                        nr_indeksu, 
+                        id_przedmiotu,
+                        data_zapisu, 
+                        status, 
+                        rok_akademicki
                     ) VALUES (
-                        seq_zapis.NEXTVAL, p_nr_indeksu, rec.id_przedmiotu,
-                        SYSDATE, 'aktywny', p_rok_akademicki,
+                        seq_zapis.NEXTVAL, 
+                        p_nr_indeksu, 
                         rec.id_przedmiotu,
-                        rec.kierunek_id_kierunku,
-                        rec.kierunek_wydzial_id_wydzialu,
-                        rec.prowadzacy_id_prowadzacego,
-                        rec.prowadzacy_katedra_id_katedry,
-                        rec.prowadzacy_katedra_wydzial_id_wydzialu,
-                        p_nr_indeksu
+                        SYSDATE, 
+                        'aktywny', 
+                        p_rok_akademicki
                     );
-                    v_count := v_count + 1;
                 END IF;
             END LOOP;
-
+        
             COMMIT;
         EXCEPTION
             WHEN NO_DATA_FOUND THEN
-                RAISE_APPLICATION_ERROR(-20002, 'Student o nr indeksu ' || p_nr_indeksu || ' nie istnieje');
+                RAISE_APPLICATION_ERROR(-20002, 
+                    'Student o nr indeksu ' || p_nr_indeksu || ' nie istnieje');
         END;
     """)
     conn.commit()
